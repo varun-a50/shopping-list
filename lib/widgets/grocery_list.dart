@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ffi';
 
 import 'package:flutter/material.dart';
 import 'package:shopping_list/data/categories.dart';
@@ -18,6 +19,10 @@ class GroceryList extends StatefulWidget {
 class _GroceryListState extends State<GroceryList> {
   List<GroceryItem> _groceryItem = [];
 
+  var _isLoading = true;
+
+  String? _error;
+
   @override
   void initState() {
     // TODO: implement initState
@@ -28,39 +33,73 @@ class _GroceryListState extends State<GroceryList> {
   void _loadItems() async {
     final url = Uri.https(
         'shopping-list-de575-default-rtdb.firebaseio.com', 'list-ho.json');
+    try {
+      final response = await http.get(url);
 
-    final response = await http.get(url);
+      if (response.statusCode >= 400) {
+        setState(() {
+          _error = 'Failed to fetch data please try again later.';
+        });
+      }
 
-    final Map<String, dynamic> ListData = json.decode(response.body);
-    List<GroceryItem> _loadedItemList = [];
-    for (var item in ListData.entries) {
-      final category = categories.entries
-          .firstWhere(
-              (catItem) => catItem.value.title == item.value['category'])
-          .value;
-      _loadedItemList.add(GroceryItem(
-          id: item.key,
-          name: item.value['name'],
-          quantity: item.value['quantity'],
-          category: category));
+//firebase return null string thats why null is in double quotes.
+      if (response.body == "null") {
+        setState(() {
+          _isLoading = false;
+        });
+        return;
+      }
+      final Map<String, dynamic> ListData = json.decode(response.body);
+      final List<GroceryItem> loadedItemList = [];
+      for (var item in ListData.entries) {
+        final category = categories.entries
+            .firstWhere(
+                (catItem) => catItem.value.title == item.value['category'])
+            .value;
+        loadedItemList.add(GroceryItem(
+            id: item.key,
+            name: item.value['name'],
+            quantity: item.value['quantity'],
+            category: category));
+      }
+
+      setState(() {
+        _groceryItem = loadedItemList;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+      });
     }
-
-    setState(() {
-      _groceryItem = _loadedItemList;
-    });
   }
 
   void _addItem() async {
-    await Navigator.of(context).push<GroceryItem>(
+    final newItem = await Navigator.of(context).push<GroceryItem>(
       MaterialPageRoute(builder: (ctx) => const NewItem()),
     );
-    _loadItems();
+    if (newItem == null) {
+      return;
+    }
+    setState(() {
+      _groceryItem.add(newItem);
+    });
   }
 
-  void _removeItem(GroceryItem groceryItem) {
+  void _removeItem(GroceryItem groceryItem) async {
+    final index = _groceryItem.indexOf(groceryItem);
     setState(() {
       _groceryItem.remove(groceryItem);
     });
+    final url = Uri.https('shopping-list-de575-default-rtdb.firebaseio.com',
+        'list-ho/${groceryItem.id}.json');
+    final response = await http.delete(url);
+    if (response.statusCode >= 400) {
+      setState(() {
+        //message
+        _groceryItem.insert(index, groceryItem);
+      });
+    }
   }
 
   @override
@@ -68,6 +107,12 @@ class _GroceryListState extends State<GroceryList> {
     Widget content = const Center(
       child: Text('No item Added yet'),
     );
+
+    if (_isLoading) {
+      content = const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
     if (_groceryItem.isNotEmpty) {
       content = ListView.builder(
         itemCount: _groceryItem.length,
@@ -93,7 +138,11 @@ class _GroceryListState extends State<GroceryList> {
         ),
       );
     }
-
+    if (_error != null) {
+      content = Center(
+        child: Text(_error!),
+      );
+    }
     return Scaffold(
       appBar: AppBar(
         actions: [IconButton(onPressed: _addItem, icon: const Icon(Icons.add))],
